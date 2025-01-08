@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Curved PWM</title>
+  <!--<meta name="viewport" content="width=device-width, initial-scale=1.0">-->
+  <style>
+      body {
+          width: 100vw;
+          height: 100vh;
+          margin: 0;
+      }
+
+      #root {
+          width: 50vw;
+          height: 100vh;
+          position: absolute;
+          right: 0;
+          top: 0;
+      }
+
+      .options-form {
+          position: fixed;
+          top: 0;
+          right: 0;
+          padding: 10px;
+          min-width: 150px;
+
+          .form-item {
+              display: flex;
+              flex-direction: column;
+              justify-content: center;
+              align-items: stretch;
+              padding-bottom: 20px;
+          }
+      }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<div class="options-form">
+  <form id="options">
+    <div class="form-item">
+      <label for="MinPwm">Min PWM:</label>
+      <input type="number" id="MinPwm" name="minPWM" value="0" step="1" min="0">
+    </div>
+    <div class="form-item">
+      <label for="MaxPWM">Max PWM:</label>
+      <input type="number" id="MaxPWM" name="maxPWM" value="255" step="1" min="0">
+    </div>
+    <div class="form-item">
+      <label for="Duration">Duration(ms):</label>
+      <input type="number" id="Duration" name="duration" value="10000" step="1" min="1000" max="10000">
+    </div>
+    <div class="form-item">
+      <label for="Interval">Interval(ms):</label>
+      <input type="number" id="Interval" name="interval" value="100" step="100" min="100" max="10000">
+    </div>
+    <div class="form-item">
+      <label for="Precision">Precision:</label>
+      <input type="number" id="Precision" name="precision" value="0" step="1" min="0" max="8">
+    </div>
+    <div>
+      <button type="submit">Upload</button>
+    </div>
+  </form>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/@mojs/core"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mojs/player"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mojs/curve-editor"></script>
+<script>
+  let curve;
+  let shape;
+  let player;
+
+  function main() {
+    const root = window.document.getElementById('root');
+
+    curve = new MojsCurveEditor({
+      name: 'pwm',
+      startPath: 'M0, 100 C0, 100 36, 0 50, 85 C74, -30 100, 100 100, 100 ',
+      isSaveState: false,
+      isHiddenOnMin: false,
+    });
+
+    const halfWidth = window.document.body.clientWidth / 2;
+    /** @type {HTMLDivElement} */
+    const curveRoot = curve._rootEl;
+    if (halfWidth > curveRoot.clientWidth) {
+      const curveRedux = curve._rootEl._component.store;
+
+      const newWidth = halfWidth - curveRoot.clientWidth - 1;
+      curveRedux.dispatch({ type: 'EDITOR_RESIZE', data: { type: 'right', x: newWidth } });
+      curveRedux.dispatch({ type: 'EDITOR_RESIZE_END', data: { type: 'right', x: newWidth + 1 } });
+
+      const newHeight = window.document.body.clientHeight - curveRoot.clientHeight - 80 - 1;
+      curveRedux.dispatch({
+        type: 'EDITOR_RESIZE',
+        data: { type: 'bottom', y: newHeight },
+      });
+      curveRedux.dispatch({
+        type: 'EDITOR_RESIZE_END',
+        data: { type: 'bottom', y: newHeight + 1 },
+      });
+      curveRedux.dispatch({
+        type: 'EDITOR_PAN_END',
+        data: newHeight / 2,
+      });
+    }
+
+    const EaseFunc = curve.getEasing();
+    const maxSpeed = 0.1;
+    let currentSpeed = 0;
+    shape = new mojs.Shape({
+      parent: root,
+      shape: 'polygon',
+      points: 3,
+      radius: 80,
+      rotate: { '0': 360 },
+      duration: 10000,
+      isShowStart: true,
+      easing: progress => {
+        currentSpeed += EaseFunc(progress) * maxSpeed;
+        return currentSpeed;
+      },
+    });
+
+    player = new MojsPlayer({
+      add: shape,
+      isPlaying: true,
+      isRepeat: true,
+      isSaveState: false,
+      precision: 100,
+    });
+
+    window.document.getElementById('options').addEventListener('submit', e => {
+      e.preventDefault();
+      const data = getOptions(e.target);
+
+      console.log('form data:', data);
+
+      if (data.maxPWM <= data.minPWM) {
+        alert('Max PWM should be greater than Min PWM');
+        return;
+      }
+
+      const PWM = data.maxPWM - data.minPWM;
+      const decimals = Math.pow(10, data.precision);
+
+      let elapsed = 0;
+
+      /** @type {number[]} */
+      const steps = [];
+      while (elapsed < data.duration) {
+        const pwm = data.minPWM + Math.floor(EaseFunc(elapsed / data.duration) * PWM * decimals) / decimals;
+        steps.push(
+          pwm < 0 ?
+            Math.max(
+              pwm,
+              -data.maxPWM,
+            ) :
+            Math.min(
+              pwm,
+              data.maxPWM,
+            ),
+        );
+        elapsed += data.interval;
+      }
+
+      console.log('pwm steps:', steps);
+
+      console.log({
+        steps,
+        stepsLength: steps.length,
+        interval: data.interval,
+      });
+    });
+  }
+
+  window.document.addEventListener('DOMContentLoaded', main);
+
+  /**
+   * @typedef Options
+   * @property {number} minPWM
+   * @property {number} maxPWM
+   * @property {number} duration
+   * @property {number} interval
+   */
+
+  /**
+   * @param {HTMLFormElement} ele
+   * @return {Options}
+   */
+  function getOptions(ele) {
+    const formData = new FormData(ele);
+    const data = {};
+    for (const [key, value] of formData.entries()) {
+      data[key] = parseInt(`${value}`);
+      if (isNaN(data[key])) {
+        data[key] = value;
+      }
+    }
+    return data;
+  }
+</script>
+</body>
+</html>
