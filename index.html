@@ -70,17 +70,60 @@
 <script id="allape_dev_id_player" src="node_modules/@mojs/player/build/mojs-player.js"></script>
 <script id="allape_dev_id_curve_editor" src="node_modules/@mojs/curve-editor/app/build/mojs-curve-editor.js"></script>
 <script>
+  /**
+   * @typedef Options
+   * @property {number} minPWM
+   * @property {number} maxPWM
+   * @property {number} duration
+   * @property {number} interval
+   */
+
+  /**
+   * @param {HTMLFormElement} ele
+   * @return {Options}
+   */
+  function getOptions(ele) {
+    const formData = new FormData(ele);
+    const data = {};
+    for (const [key, value] of formData.entries()) {
+      data[key] = parseInt(`${value}`);
+      if (isNaN(data[key])) {
+        data[key] = value;
+      }
+    }
+    return data;
+  }
+
+  /**
+   * @typedef Params
+   * @property {string=} path
+   * @property {string=} duration
+   */
+
+  /**
+   * @return {Params}
+   */
+  function getParams() {
+    const params = new URLSearchParams(window.location.search);
+    return Array.from(params.entries()).reduce((acc, [key, value]) => {
+      acc[key] = value;
+      return acc;
+    }, {});
+  }
+</script>
+<script>
   let curve;
   let shape;
   let player;
 
   function main() {
     const root = window.document.getElementById('root');
-    const pathFromURL = new URLSearchParams(window.location.search).get('path');
+
+    const params = getParams();
 
     curve = new MojsCurveEditor({
       name: 'pwm',
-      startPath: pathFromURL || 'M0, 100 C0, 100 50, 0 50, 0 C50, 0 100, 100 100, 100',
+      startPath: params.path || 'M0, 100 C0, 100 50, 0 50, 0 C50, 0 100, 100 100, 100',
       isSaveState: false,
       isHiddenOnMin: false,
     });
@@ -119,7 +162,7 @@
       points: 3,
       radius: 80,
       rotate: { '0': 360 },
-      duration: 10000,
+      duration: (params.duration * 1) || 10000,
       isShowStart: true,
       easing: progress => {
         currentSpeed += EaseFunc(progress) * maxSpeed;
@@ -191,30 +234,6 @@
   }
 
   window.document.addEventListener('DOMContentLoaded', main);
-
-  /**
-   * @typedef Options
-   * @property {number} minPWM
-   * @property {number} maxPWM
-   * @property {number} duration
-   * @property {number} interval
-   */
-
-  /**
-   * @param {HTMLFormElement} ele
-   * @return {Options}
-   */
-  function getOptions(ele) {
-    const formData = new FormData(ele);
-    const data = {};
-    for (const [key, value] of formData.entries()) {
-      data[key] = parseInt(`${value}`);
-      if (isNaN(data[key])) {
-        data[key] = value;
-      }
-    }
-    return data;
-  }
 </script>
 </body>
 </html>
