@@ -41,5 +41,7 @@ IndexHTML = replace(
 fs.mkdirSync(DIST, { recursive: true });
 fs.writeFileSync(`${DIST}/index.html`, IndexHTML);
 if (!BuildDocs) {
-  fs.writeFileSync(`${DIST}/index.html.gz`, gzipSync(IndexHTML));
+  const gzipped = gzipSync(IndexHTML);
+  fs.writeFileSync(`${DIST}/index.html.gz`, gzipped);
+  fs.writeFileSync(`./esp32/src/index.html.gz`, gzipped);
 }

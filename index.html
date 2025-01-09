@@ -134,7 +134,7 @@
       precision: 100,
     });
 
-    window.document.getElementById('options').addEventListener('submit', e => {
+    window.document.getElementById('options').addEventListener('submit', async (e) => {
       e.preventDefault();
       const data = getOptions(e.target);
 
@@ -168,13 +168,24 @@
         elapsed += data.interval;
       }
 
-      console.log('pwm steps:', steps);
-
-      console.log({
+      /**
+       * @type {{steps: number[], interval: number}}
+       */
+      const json = {
         steps,
-        stepsLength: steps.length,
         interval: data.interval,
-      });
+      };
+
+      try {
+        const res = await (await fetch('/pwm', {
+          method: 'POST',
+          body: JSON.stringify(json),
+        })).text();
+        console.log(res);
+      } catch (e) {
+        console.error(e);
+        alert('Failed to upload data');
+      }
     });
   }
 

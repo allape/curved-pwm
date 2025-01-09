@@ -1,0 +1,8 @@
+/.vscode
+/.embuild
+/target
+/Cargo.lock
+
+/src/index.html.gz
+
+cfg.toml

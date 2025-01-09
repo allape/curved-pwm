@@ -1,0 +1,6 @@
+# Name,   Type, SubType, Offset,  Size
+nvs,      data, nvs,            ,  0x6000
+phy_init, data, phy,            ,  0x1000
+factory,  app,  factory,        ,  3348K
+coredump, data, coredump,       ,  64K
+spiffs,   data, spiffs,         ,  400K,
