@@ -1,5 +1,4 @@
 use std::{
-    ffi::CStr,
     fs, result,
     sync::{Arc, Mutex},
     thread,
@@ -10,19 +9,23 @@ use anyhow::{Ok, Result};
 use esp_idf_hal::{gpio::PinDriver, io::Write};
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
-    hal::{gpio, ledc, peripheral, prelude::Peripherals},
+    hal::{ledc, prelude::Peripherals},
     http::{self, Method},
-    ipv4,
-    netif::{EspNetif, NetifConfiguration},
     nvs::EspDefaultNvsPartition,
-    wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi},
 };
 use esp_idf_sys::{
-    esp_err_t, esp_err_to_name, esp_spiffs_check, esp_spiffs_format, esp_spiffs_info,
-    esp_vfs_spiffs_conf_t, esp_vfs_spiffs_register, ESP_OK,
+    esp_spiffs_check, esp_spiffs_info, esp_vfs_spiffs_conf_t, esp_vfs_spiffs_register, ESP_OK,
 };
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
+
+mod esp32;
+mod pwm;
+mod wifi;
+
+// FIXME
+// can not extract spiffs-related code to a separate module,
+// otherwise the error `ESP_ERR_INVALID_ARG` will be raised during spiffs registration.
 
 const INDEX_HTML_GZ: &[u8] = include_bytes!("./index.html.gz");
 
@@ -102,79 +105,6 @@ fn new_spiffs_config() -> esp_vfs_spiffs_conf_t {
     spiffs_config
 }
 
-fn esp_err_to_str(err: esp_err_t) -> &'static str {
-    unsafe { CStr::from_ptr(esp_err_to_name(err)).to_str().unwrap() }
-}
-
-fn connect_wifi(
-    modem: impl peripheral::Peripheral<P = esp_idf_hal::modem::Modem> + 'static,
-    sysloop: EspSystemEventLoop,
-    nvs: EspDefaultNvsPartition,
-) -> Result<BlockingWifi<EspWifi<'static>>> {
-    let wifi_sta_netif_key = format!("WIFI_STA_{:?}", CONFIG.device_name);
-    let wifi_ap_netif_key = format!("WIFI_AP_{:?}", CONFIG.device_name);
-
-    let mut inner_wifi = EspWifi::new(modem, sysloop.clone(), Some(nvs))?;
-    inner_wifi.swap_netif(
-        EspNetif::new_with_conf(&NetifConfiguration {
-            key: wifi_sta_netif_key.as_str().try_into().unwrap(),
-            ip_configuration: Some(ipv4::Configuration::Client(
-                ipv4::ClientConfiguration::DHCP(ipv4::DHCPClientSettings {
-                    hostname: Some(CONFIG.device_name.try_into().unwrap()),
-                }),
-            )),
-            ..NetifConfiguration::wifi_default_client()
-        })?,
-        EspNetif::new_with_conf(&NetifConfiguration {
-            key: wifi_ap_netif_key.as_str().try_into().unwrap(),
-            ..NetifConfiguration::wifi_default_router()
-        })?,
-    )?;
-
-    let mut wifi = BlockingWifi::wrap(inner_wifi, sysloop)?;
-
-    let wifi_configuration: Configuration = Configuration::Client(ClientConfiguration {
-        ssid: CONFIG.wifi_ssid.try_into().unwrap(),
-        bssid: None,
-        auth_method: AuthMethod::WPA2Personal,
-        password: CONFIG.wifi_psk.try_into().unwrap(),
-        channel: None,
-        ..Default::default()
-    });
-
-    info!("with ssid: {}", CONFIG.wifi_ssid);
-
-    wifi.set_configuration(&wifi_configuration)?;
-
-    info!("Wifi configuration set with ssid: {}", CONFIG.wifi_ssid);
-
-    wifi.start()?;
-    info!("Wifi started");
-
-    wifi.connect()?;
-    info!("Wifi connected");
-
-    wifi.wait_netif_up()?;
-    info!("Wifi netif up");
-
-    Ok(wifi)
-}
-
-fn new_pwm_driver<Timer, Channel>(
-    timer: impl peripheral::Peripheral<P = Timer> + 'static,
-    channel: impl peripheral::Peripheral<P = Channel> + 'static,
-    pin: impl peripheral::Peripheral<P = impl gpio::OutputPin> + 'static,
-) -> Result<Arc<Mutex<ledc::LedcDriver<'static>>>>
-where
-    Timer: ledc::LedcTimer + 'static,
-    Channel: ledc::LedcChannel<SpeedMode = Timer::SpeedMode>,
-{
-    let pwm_timer = ledc::LedcTimerDriver::new(timer, &ledc::config::TimerConfig::default())?;
-    let pwm_driver = ledc::LedcDriver::new(channel, &pwm_timer, pin)?;
-
-    Ok(Arc::new(Mutex::new(pwm_driver)))
-}
-
 fn main() -> Result<()> {
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
@@ -195,7 +125,10 @@ fn main() -> Result<()> {
             if res == ESP_OK {
                 info!("SPIFFS mounted");
             } else {
-                error!("Failed to initialize SPIFFS: {}", esp_err_to_str(res));
+                error!(
+                    "Failed to initialize SPIFFS: {}",
+                    esp32::esp_err_to_str(res)
+                );
                 return Ok(());
             }
 
@@ -209,7 +142,7 @@ fn main() -> Result<()> {
             if res == ESP_OK {
                 info!("SPIFFS: total: {}, used: {}", total_bytes, used_bytes);
             } else {
-                error!("Failed to get SPIFFS info: {}", esp_err_to_str(res));
+                error!("Failed to get SPIFFS info: {}", esp32::esp_err_to_str(res));
                 return Ok(());
             }
 
@@ -219,7 +152,7 @@ fn main() -> Result<()> {
                 );
                 let res = esp_spiffs_check(spiffs_config.partition_label);
                 if res != ESP_OK {
-                    error!("Failed to check SPIFFS: {}", esp_err_to_str(res));
+                    error!("Failed to check SPIFFS: {}", esp32::esp_err_to_str(res));
                 }
             }
 
@@ -238,52 +171,24 @@ fn main() -> Result<()> {
         info!("no pwm config found");
     }
 
-    // connect to wifi
-    let mut wifi = connect_wifi(peripherals.modem, sysloop, nvs)?;
-    thread::spawn(move || loop {
-        thread::sleep(Duration::from_secs(10));
+    let w = wifi::setup(
+        peripherals.modem,
+        sysloop,
+        nvs,
+        &CONFIG.device_name,
+        &CONFIG.wifi_ssid,
+        &CONFIG.wifi_psk,
+    )?;
+    wifi::guard(w, Duration::from_secs(10));
 
-        match wifi.is_connected() {
-            result::Result::Ok(true) => {
-                continue;
-            }
-            _ => {
-                info!("WiFi not connected, trying to connect");
-            }
-        }
-
-        match wifi.connect() {
-            result::Result::Ok(_) => {
-                info!("WiFi connected");
-            }
-            Err(e) => {
-                info!("WiFi connect error: {:?}", e);
-                continue;
-            }
-        }
-
-        match wifi.wait_netif_up() {
-            result::Result::Ok(_) => {
-                info!("WiFi netif up");
-            }
-            Err(e) => {
-                info!("WiFi netif up error: {:?}", e);
-                continue;
-            }
-        }
-    });
-
-    // pin drivers
-    let mut reverse_pin = PinDriver::output(peripherals.pins.gpio5).unwrap();
-
-    let led = new_pwm_driver(
+    let mut reverse = PinDriver::output(peripherals.pins.gpio5).unwrap();
+    let mut led = pwm::new_driver(
         unsafe { ledc::TIMER0::new() },
         unsafe { ledc::CHANNEL0::new() },
         // peripherals.pins.gpio8,
         peripherals.pins.gpio3,
     )?;
-
-    let pwm = new_pwm_driver(
+    let mut output = pwm::new_driver(
         unsafe { ledc::TIMER0::new() },
         unsafe { ledc::CHANNEL0::new() },
         // peripherals.pins.gpio0,
@@ -306,22 +211,6 @@ fn main() -> Result<()> {
                 ],
             )?
             .write_all(INDEX_HTML_GZ)?;
-            result::Result::Ok(())
-        },
-    )?;
-
-    server.fn_handler(
-        "/reformat",
-        Method::Get,
-        move |req| -> result::Result<(), anyhow::Error> {
-            let res;
-            unsafe {
-                let config = new_spiffs_config();
-                res = esp_spiffs_format(config.partition_label);
-            }
-
-            req.into_response(200, None, &[("Content-type", "text/plain; charset=UTF-8")])?
-                .write_all(res.to_string().as_bytes())?;
             result::Result::Ok(())
         },
     )?;
@@ -376,7 +265,7 @@ fn main() -> Result<()> {
     let mut interval_: u64;
     let mut duty: i32 = 0;
 
-    let max_duty = led.lock().unwrap().get_max_duty();
+    let max_duty = led.get_max_duty();
     info!("max duty: {:?}", max_duty);
 
     loop {
@@ -398,23 +287,17 @@ fn main() -> Result<()> {
         {
             if duty < 0 {
                 duty = -duty;
-                if reverse_pin.is_set_low() {
-                    reverse_pin.set_high().unwrap();
+                if reverse.is_set_low() {
+                    reverse.set_high().unwrap();
                 }
             } else {
-                if reverse_pin.is_set_high() {
-                    reverse_pin.set_low().unwrap();
+                if reverse.is_set_high() {
+                    reverse.set_low().unwrap();
                 }
             }
 
-            led.lock()
-                .unwrap()
-                .set_duty(duty.try_into().unwrap())
-                .unwrap();
-            pwm.lock()
-                .unwrap()
-                .set_duty(duty.try_into().unwrap())
-                .unwrap();
+            led.set_duty(duty.try_into().unwrap()).unwrap();
+            output.set_duty(duty.try_into().unwrap()).unwrap();
 
             // info!("duty: {:?}", duty);
 
