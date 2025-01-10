@@ -181,18 +181,38 @@ fn main() -> Result<()> {
     )?;
     wifi::guard(w, Duration::from_secs(10));
 
-    let mut reverse = PinDriver::output(peripherals.pins.gpio5).unwrap();
+    #[cfg(feature = "esp-c3-32s")]
+    let mut reverse = PinDriver::output(
+        peripherals.pins.gpio5, // blue led
+    ).unwrap();
+    #[cfg(feature = "esp-c3-32s")]
     let mut led = pwm::new_driver(
         unsafe { ledc::TIMER0::new() },
         unsafe { ledc::CHANNEL0::new() },
-        // peripherals.pins.gpio8,
-        peripherals.pins.gpio3,
+        peripherals.pins.gpio4, // green led
     )?;
+    #[cfg(feature = "esp-c3-32s")]
     let mut output = pwm::new_driver(
         unsafe { ledc::TIMER0::new() },
         unsafe { ledc::CHANNEL0::new() },
-        // peripherals.pins.gpio0,
-        peripherals.pins.gpio4,
+        peripherals.pins.gpio3, // red led
+    )?;
+
+    #[cfg(feature = "esp32-c3-supermini")]
+    let mut reverse = PinDriver::output(
+        peripherals.pins.gpio0,
+    ).unwrap();
+    #[cfg(feature = "esp32-c3-supermini")]
+    let mut led = pwm::new_driver(
+        unsafe { ledc::TIMER0::new() },
+        unsafe { ledc::CHANNEL0::new() },
+        peripherals.pins.gpio8, // built-in led
+    )?;
+    #[cfg(feature = "esp32-c3-supermini")]
+    let mut output = pwm::new_driver(
+        unsafe { ledc::TIMER0::new() },
+        unsafe { ledc::CHANNEL0::new() },
+        peripherals.pins.gpio3,
     )?;
 
     // http server

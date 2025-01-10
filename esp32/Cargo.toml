@@ -18,7 +18,12 @@ debug = true    # Symbols are nice and they don't increase the size on Flash
 opt-level = "z"
 
 [features]
-default = []
+default = [
+    #    "esp-c3-32s",
+    "esp32-c3-supermini",
+]
+esp-c3-32s = []
+esp32-c3-supermini = []
 
 experimental = ["esp-idf-svc/experimental"]
 
