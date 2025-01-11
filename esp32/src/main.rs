@@ -1,11 +1,11 @@
 use std::{
-    fs, result,
+    fs,
     sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
 
-use anyhow::{Ok, Result};
+use anyhow::Result;
 use esp_idf_hal::{gpio::PinDriver, io::Write};
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
@@ -20,14 +20,13 @@ use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 
 mod esp32;
+mod http_handler;
 mod pwm;
 mod wifi;
 
 // FIXME
 // can not extract spiffs-related code to a separate module,
 // otherwise the error `ESP_ERR_INVALID_ARG` will be raised during spiffs registration.
-
-const INDEX_HTML_GZ: &[u8] = include_bytes!("./index.html.gz");
 
 const FS_BASE_PATH: &str = "/spiffs";
 
@@ -39,7 +38,7 @@ const CONFIG_FILE_NAME: &str = "/spiffs/config.bin";
 
 #[toml_cfg::toml_config]
 pub struct Config {
-    #[default("espressif")]
+    #[default("")]
     device_name: &'static str,
     #[default("")]
     wifi_ssid: &'static str,
@@ -53,7 +52,7 @@ struct PwmConfig {
     interval: u64,
 }
 
-fn read_from_file() -> Result<Option<PwmConfig>> {
+fn get_config() -> Result<Option<PwmConfig>> {
     if !fs::exists(CONFIG_FILE_NAME)? {
         return Ok(None);
     }
@@ -83,7 +82,7 @@ fn read_from_file() -> Result<Option<PwmConfig>> {
     Ok(Some(PwmConfig { steps, interval }))
 }
 
-fn write_to_file(config: &PwmConfig) -> Result<()> {
+fn save_config(config: &PwmConfig) -> Result<()> {
     let mut buffer = vec![];
     buffer.extend_from_slice(&config.interval.to_be_bytes());
 
@@ -161,7 +160,7 @@ fn main() -> Result<()> {
     }
 
     // read saved config
-    if let Some(pwm_config) = read_from_file()? {
+    if let Some(pwm_config) = get_config()? {
         info!("read pwm config: {:?}", pwm_config);
         let mut steps = steps.lock().unwrap();
         *steps = pwm_config.steps.clone();
@@ -184,7 +183,8 @@ fn main() -> Result<()> {
     #[cfg(feature = "esp-c3-32s")]
     let mut reverse = PinDriver::output(
         peripherals.pins.gpio5, // blue led
-    ).unwrap();
+    )
+    .unwrap();
     #[cfg(feature = "esp-c3-32s")]
     let mut led = pwm::new_driver(
         unsafe { ledc::TIMER0::new() },
@@ -199,9 +199,7 @@ fn main() -> Result<()> {
     )?;
 
     #[cfg(feature = "esp32-c3-supermini")]
-    let mut reverse = PinDriver::output(
-        peripherals.pins.gpio0,
-    ).unwrap();
+    let mut reverse = PinDriver::output(peripherals.pins.gpio0).unwrap();
     #[cfg(feature = "esp32-c3-supermini")]
     let mut led = pwm::new_driver(
         unsafe { ledc::TIMER0::new() },
@@ -217,67 +215,53 @@ fn main() -> Result<()> {
 
     // http server
     let mut server = http::server::EspHttpServer::new(&http::server::Configuration::default())?;
+    server.fn_handler("/", Method::Get, http_handler::handle_index)?;
+    server.fn_handler("/favicon.ico", Method::Get, http_handler::handle_favicon)?;
     server.fn_handler(
-        "/",
+        "/sensors",
         Method::Get,
-        move |req| -> result::Result<(), anyhow::Error> {
-            req.into_response(
-                200,
-                None,
-                &[
-                    ("Content-Encoding", "gzip"),
-                    ("Content-type", "text/html; charset=UTF-8"),
-                    ("Cache-Control", "max-age=3600"),
-                ],
-            )?
-            .write_all(INDEX_HTML_GZ)?;
-            result::Result::Ok(())
-        },
+        http_handler::new_temperature_handler(),
     )?;
 
     let cloned_steps = Arc::clone(&steps);
     let cloned_interval = Arc::clone(&interval);
-    server.fn_handler(
-        "/pwm",
-        Method::Post,
-        move |mut req| -> result::Result<(), anyhow::Error> {
-            let mut buffer = Vec::new();
-            let mut temp_buffer = [0u8; 1024];
+    server.fn_handler("/pwm", Method::Post, move |mut req| -> Result<()> {
+        let mut buffer = Vec::new();
+        let mut temp_buffer = [0u8; 1024];
 
-            loop {
-                let bytes_read = req.read(&mut temp_buffer)?;
-                if bytes_read == 0 {
-                    break;
-                }
-                buffer.extend_from_slice(&temp_buffer[..bytes_read]);
+        loop {
+            let bytes_read = req.read(&mut temp_buffer)?;
+            if bytes_read == 0 {
+                break;
             }
+            buffer.extend_from_slice(&temp_buffer[..bytes_read]);
+        }
 
-            let config: PwmConfig = serde_json::from_slice(&buffer.as_slice())?;
+        let config: PwmConfig = serde_json::from_slice(&buffer.as_slice())?;
 
-            info!("steps: {:?}", config.steps.clone());
-            info!("interval: {:?}", config.interval.clone());
+        info!("steps: {:?}", config.steps.clone());
+        info!("interval: {:?}", config.interval.clone());
 
-            let mut steps = cloned_steps.lock().unwrap();
-            *steps = config.steps.clone();
+        let mut steps = cloned_steps.lock().unwrap();
+        *steps = config.steps.clone();
 
-            let mut interval = cloned_interval.lock().unwrap();
-            *interval = config.interval;
+        let mut interval = cloned_interval.lock().unwrap();
+        *interval = config.interval;
 
-            match write_to_file(&config) {
-                result::Result::Ok(_) => {
-                    info!("config saved");
-                }
-                Err(e) => {
-                    info!("config save error: {:?}", e);
-                }
+        match save_config(&config) {
+            Result::Ok(_) => {
+                info!("config saved");
             }
+            Err(e) => {
+                error!("config save error: {:?}", e);
+            }
+        }
 
-            req.into_response(200, None, &[("Content-type", "text/plain; charset=UTF-8")])?
-                .write_all("ok".as_bytes())?;
+        req.into_response(200, None, &[("Content-type", "text/plain; charset=UTF-8")])?
+            .write_all("ok".as_bytes())?;
 
-            result::Result::Ok(())
-        },
-    )?;
+        Ok(())
+    })?;
 
     println!("ESP Started!");
 

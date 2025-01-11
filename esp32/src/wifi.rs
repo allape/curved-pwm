@@ -11,7 +11,7 @@ use esp_idf_svc::{
     ipv4,
     netif::{EspNetif, NetifConfiguration},
     nvs::EspDefaultNvsPartition,
-    wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi},
+    wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi, WifiDeviceId},
 };
 
 pub fn setup(
@@ -22,10 +22,25 @@ pub fn setup(
     ssid: &str,
     psk: &str,
 ) -> Result<BlockingWifi<EspWifi<'static>>> {
+    let mut inner_wifi = EspWifi::new(modem, sysloop.clone(), Some(nvs))?;
+
+    let device_name: String = if device_name.is_empty() {
+        let mac = inner_wifi.get_mac(WifiDeviceId::Sta)?;
+        format!(
+            "{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+        )
+    } else {
+        device_name.to_string()
+    };
+
+    let device_name = device_name.as_str();
+
+    info!("Wifi device name: {}, ssid: {}", device_name, ssid);
+
     let wifi_sta_netif_key = format!("WIFI_STA_{:?}", device_name);
     let wifi_ap_netif_key = format!("WIFI_AP_{:?}", device_name);
 
-    let mut inner_wifi = EspWifi::new(modem, sysloop.clone(), Some(nvs))?;
     inner_wifi.swap_netif(
         EspNetif::new_with_conf(&NetifConfiguration {
             key: wifi_sta_netif_key.as_str().try_into().unwrap(),
@@ -54,8 +69,6 @@ pub fn setup(
     });
 
     wifi.set_configuration(&wifi_configuration)?;
-
-    info!("Wifi configuration set with ssid: {}", ssid);
 
     wifi.start()?;
     info!("Wifi started");

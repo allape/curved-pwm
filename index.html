@@ -62,6 +62,10 @@
       <input type="number" id="Precision" name="precision" value="0" step="1" min="0" max="8">
     </div>
     <div class="form-item">
+      <label for="MaxSteps">Max Steps:</label>
+      <input type="number" id="MaxSteps" name="maxSteps" value="2000" step="1" min="0">
+    </div>
+    <div class="form-item">
       <label for="Reverse">Reverse:</label>
       <input type="checkbox" id="Reverse" name="reverse">
     </div>
@@ -80,6 +84,8 @@
    * @property {number} maxPWM
    * @property {number} duration
    * @property {number} interval
+   * @property {number} precision
+   * @property {number} maxSteps
    * @property {'on' | ''} reverse
    */
 
@@ -202,7 +208,7 @@
 
       /** @type {number[]} */
       const steps = [];
-      while (elapsed < data.duration) {
+      while (elapsed < data.duration && steps.length < data.maxSteps) {
         let pwm = data.minPWM + Math.floor(EaseFunc(elapsed / data.duration) * PWM * decimals) / decimals;
         pwm = pwm < 0 ? Math.max(pwm, -data.maxPWM) : Math.min(pwm, data.maxPWM);
         if (isReversed) {
@@ -220,12 +226,17 @@
         interval: data.interval,
       };
 
+      console.log('uploading data:', json);
+
       try {
-        console.log('uploading data:', json);
         const res = await (await fetch('/pwm', {
           method: 'POST',
           body: JSON.stringify(json),
         })).text();
+        if (res !== 'ok') {
+          // noinspection ExceptionCaughtLocallyJS
+          throw new Error(res);
+        }
         console.log(res);
       } catch (e) {
         console.error(e);

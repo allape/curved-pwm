@@ -19,8 +19,8 @@ opt-level = "z"
 
 [features]
 default = [
-    #    "esp-c3-32s",
-    "esp32-c3-supermini",
+    "esp-c3-32s",
+    # "esp32-c3-supermini",
 ]
 esp-c3-32s = []
 esp32-c3-supermini = []

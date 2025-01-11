@@ -10,3 +10,9 @@ Edit PWM steps with a curve editor.
 
 - [esp32](esp32/README.md) in rust
     - esp32c3 for now
+
+### Credits
+
+- [Favicon](esp32/src/fan.png): https://www.irasutoya.com/2019/07/blog-post_8.html
+- ESP32: https://docs.espressif.com/projects/esp-idf/en/v5.4/esp32c3/get-started/index.html
+- ESPUP: https://github.com/esp-rs/espup

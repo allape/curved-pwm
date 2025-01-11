@@ -3,6 +3,7 @@ use esp_idf_hal::{
     gpio::OutputPin,
     ledc::{config::TimerConfig, LedcChannel, LedcDriver, LedcTimer, LedcTimerDriver},
     peripheral::Peripheral,
+    units::Hertz,
 };
 
 pub fn new_driver<Timer, Channel>(
@@ -14,7 +15,10 @@ where
     Timer: LedcTimer + 'static,
     Channel: LedcChannel<SpeedMode = Timer::SpeedMode>,
 {
-    let pwm_timer = LedcTimerDriver::new(timer, &TimerConfig::default())?;
+    let mut config = TimerConfig::default();
+    config.frequency = Hertz(20_000);
+
+    let pwm_timer = LedcTimerDriver::new(timer, &config)?;
     let pwm_driver = LedcDriver::new(channel, &pwm_timer, pin)?;
 
     Ok(pwm_driver)
