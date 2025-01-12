@@ -6,7 +6,7 @@ use std::{
 use anyhow::Result;
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
-    hal::{gpio::PinDriver, io::Write, ledc, prelude::*, units::Hertz},
+    hal::{gpio::PinDriver, io::Write, prelude::*},
     http::{server, Method},
     nvs::EspDefaultNvsPartition,
 };
@@ -56,38 +56,30 @@ fn main() -> Result<()> {
     #[cfg(feature = "esp-c3-32s")]
     let pinner = main_loop::Pinner {
         direction: PinDriver::output(peripherals.pins.gpio5)?, // blue led
-        led: pwm::new_driver(
-            unsafe { ledc::TIMER0::new() },
-            unsafe { ledc::CHANNEL0::new() },
+        led: pwm::new_20khz(
+            peripherals.ledc.timer0,
+            peripherals.ledc.channel0,
             peripherals.pins.gpio4, // green led
-            Some(Hertz(20_000)),
-            None,
         )?,
-        output: pwm::new_driver(
-            unsafe { ledc::TIMER0::new() },
-            unsafe { ledc::CHANNEL0::new() },
+        output: pwm::new_20khz(
+            peripherals.ledc.timer1,
+            peripherals.ledc.channel1,
             peripherals.pins.gpio3, // red led
-            Some(Hertz(20_000)),
-            None,
         )?,
     };
 
     #[cfg(feature = "esp32-c3-supermini")]
     let pinner = main_loop::Pinner {
         reverse: PinDriver::output(peripherals.pins.gpio0)?,
-        led: pwm::new_driver(
-            unsafe { ledc::TIMER0::new() },
-            unsafe { ledc::CHANNEL0::new() },
+        led: pwm::new_20khz(
+            peripherals.ledc.timer0,
+            peripherals.ledc.channel0,
             peripherals.pins.gpio8, // built-in led
-            Some(Hertz(20_000)),
-            None,
         )?,
-        output: pwm::new_driver(
-            unsafe { ledc::TIMER0::new() },
-            unsafe { ledc::CHANNEL0::new() },
+        output: pwm::new_20khz(
+            peripherals.ledc.timer1,
+            peripherals.ledc.channel1,
             peripherals.pins.gpio3,
-            Some(Hertz(20_000)),
-            None,
         )?,
     };
 
@@ -177,19 +169,19 @@ mod main_loop {
         thread::{self, JoinHandle},
         time::Duration,
     };
-    
+
     use esp_idf_svc::hal::{
         gpio::{Output, OutputPin, PinDriver},
         ledc::LedcDriver,
     };
     use log::info;
-    
+
     pub struct Pinner<'a, ReversePin: OutputPin> {
         pub direction: PinDriver<'a, ReversePin, Output>,
         pub led: LedcDriver<'a>,
         pub output: LedcDriver<'a>,
     }
-    
+
     pub fn new<ReversePin: OutputPin>(
         mut pinner: Pinner<'static, ReversePin>,
         interval: Arc<Mutex<u64>>,
@@ -199,16 +191,16 @@ mod main_loop {
             let mut index = 0;
             let mut interval_: u64;
             let mut duty: i32 = 0;
-    
+
             let max_duty = pinner.led.get_max_duty();
             info!("max duty: {:?}", max_duty);
-    
+
             loop {
                 {
                     interval_ = *interval.lock().unwrap();
-    
+
                     let steps_ = steps.lock().unwrap();
-    
+
                     if steps_.len() == 1 {
                         duty = steps_[0];
                     } else if steps_.len() > 1 {
@@ -218,7 +210,7 @@ mod main_loop {
                         duty = steps_[index];
                     }
                 }
-    
+
                 {
                     if duty < 0 {
                         duty = -duty;
@@ -230,18 +222,17 @@ mod main_loop {
                             pinner.direction.set_low().unwrap();
                         }
                     }
-    
+
                     pinner.led.set_duty(duty.try_into().unwrap()).unwrap();
                     pinner.output.set_duty(duty.try_into().unwrap()).unwrap();
-    
+
                     // info!("duty: {:?}", duty);
-    
+
                     index += 1;
                 }
-    
+
                 thread::sleep(Duration::from_millis(interval_));
             }
         })
     }
-    
 }

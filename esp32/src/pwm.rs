@@ -3,10 +3,10 @@ use esp_idf_svc::hal::{
     gpio::OutputPin,
     ledc::{config::TimerConfig, LedcChannel, LedcDriver, LedcTimer, LedcTimerDriver, Resolution},
     peripheral::Peripheral,
-    units::Hertz,
+    units::{Hertz, KiloHertz},
 };
 
-pub fn new_driver<'a, Timer, Channel>(
+pub fn new<'a, Timer, Channel>(
     timer: impl Peripheral<P = Timer> + 'a,
     channel: impl Peripheral<P = Channel> + 'a,
     pin: impl Peripheral<P = impl OutputPin> + 'a,
@@ -21,8 +21,20 @@ where
     config.frequency = frequency.unwrap_or(Hertz(1000));
     config.resolution = resolution.unwrap_or(Resolution::Bits8);
 
-    let pwm_timer = LedcTimerDriver::new(timer, &config)?;
-    let pwm_driver = LedcDriver::new(channel, &pwm_timer, pin)?;
+    let timer_driver = LedcTimerDriver::new(timer, &config)?;
+    let ledc_driver = LedcDriver::new(channel, &timer_driver, pin)?;
 
-    Ok(pwm_driver)
+    Ok(ledc_driver)
+}
+
+pub fn new_20khz<'a, Timer, Channel>(
+    timer: impl Peripheral<P = Timer> + 'a,
+    channel: impl Peripheral<P = Channel> + 'a,
+    pin: impl Peripheral<P = impl OutputPin> + 'a,
+) -> Result<LedcDriver<'a>>
+where
+    Timer: LedcTimer + 'a,
+    Channel: LedcChannel<SpeedMode = Timer::SpeedMode>,
+{
+    new(timer, channel, pin, Some(KiloHertz(20).into()), None)
 }
