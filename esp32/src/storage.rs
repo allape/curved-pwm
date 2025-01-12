@@ -1,4 +1,4 @@
-use std::{fs, thread, time::Duration};
+use std::fs;
 
 use anyhow::{anyhow, Ok, Result};
 use esp_idf_svc::sys::{
@@ -90,7 +90,6 @@ pub fn new() -> Result<()> {
         let config = spiffs_config.0;
 
         let res = esp_vfs_spiffs_register(&config);
-        thread::sleep(Duration::from_secs(10));
         if res == ESP_OK {
             info!("SPIFFS mounted");
         } else {
