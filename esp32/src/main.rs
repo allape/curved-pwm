@@ -70,7 +70,7 @@ fn main() -> Result<()> {
 
     #[cfg(feature = "esp32-c3-supermini")]
     let pinner = main_loop::Pinner {
-        reverse: PinDriver::output(peripherals.pins.gpio0)?,
+        direction: PinDriver::output(peripherals.pins.gpio0)?,
         led: pwm::new_20khz(
             peripherals.ledc.timer0,
             peripherals.ledc.channel0,
