@@ -1,19 +1,21 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
-use esp_idf_hal::io::Write;
-use esp_idf_svc::http::server::{EspHttpConnection, Request};
-use esp_idf_sys::{
-    soc_module_clk_t_SOC_MOD_CLK_XTAL, temperature_sensor_config_t, temperature_sensor_enable,
-    temperature_sensor_get_celsius, temperature_sensor_handle_t, temperature_sensor_install,
-    ESP_OK,
+use esp_idf_svc::{
+    hal::io::Write,
+    http::server::{EspHttpConnection, Request},
+    sys::{
+        soc_module_clk_t_SOC_MOD_CLK_XTAL, temperature_sensor_config_t, temperature_sensor_enable,
+        temperature_sensor_get_celsius, temperature_sensor_handle_t, temperature_sensor_install,
+        ESP_OK,
+    },
 };
 use log::error;
 
 use crate::esp32;
 
-const INDEX_HTML_GZ: &[u8] = include_bytes!("./index.html.gz");
-const FAVICON_PNG: &[u8] = include_bytes!("./fan.png");
+static INDEX_HTML_GZ: &[u8] = include_bytes!("./assets/index.html.gz");
+static FAVICON_PNG: &[u8] = include_bytes!("./assets/fan.png");
 
 pub fn new_error_handler<'a>(
     message: &'a str,

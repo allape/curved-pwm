@@ -1,40 +1,22 @@
 use std::{
-    fs,
     sync::{Arc, Mutex},
-    thread,
     time::Duration,
 };
 
 use anyhow::Result;
-use esp_idf_hal::{gpio::PinDriver, io::Write};
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
-    hal::{ledc, prelude::Peripherals},
-    http::{self, Method},
+    hal::{gpio::PinDriver, io::Write, ledc, prelude::*, units::Hertz},
+    http::{server, Method},
     nvs::EspDefaultNvsPartition,
 };
-use esp_idf_sys::{
-    esp_spiffs_check, esp_spiffs_info, esp_vfs_spiffs_conf_t, esp_vfs_spiffs_register, ESP_OK,
-};
-use log::{error, info, warn};
-use serde::{Deserialize, Serialize};
+use log::{error, info};
 
 mod esp32;
 mod http_handler;
 mod pwm;
+mod storage;
 mod wifi;
-
-// FIXME
-// can not extract spiffs-related code to a separate module,
-// otherwise the error `ESP_ERR_INVALID_ARG` will be raised during spiffs registration.
-
-const FS_BASE_PATH: &str = "/spiffs";
-
-/**
- * Diagram
- * interval_u64, pwm_i32 * n
- */
-const CONFIG_FILE_NAME: &str = "/spiffs/config.bin";
 
 #[toml_cfg::toml_config]
 pub struct Config {
@@ -44,64 +26,6 @@ pub struct Config {
     wifi_ssid: &'static str,
     #[default("")]
     wifi_psk: &'static str,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct PwmConfig {
-    steps: Vec<i32>,
-    interval: u64,
-}
-
-fn get_config() -> Result<Option<PwmConfig>> {
-    if !fs::exists(CONFIG_FILE_NAME)? {
-        return Ok(None);
-    }
-
-    let config = fs::read(CONFIG_FILE_NAME)?;
-    if config.len() < 8 || (config.len() - 8) % 4 != 0 {
-        fs::remove_file(CONFIG_FILE_NAME)?;
-        return Ok(None);
-    }
-
-    let interval = u64::from_be_bytes(config[0..8].try_into().unwrap());
-    let mut steps = vec![];
-
-    let mut index = 8;
-    loop {
-        if index >= config.len() {
-            break;
-        }
-
-        steps.push(i32::from_be_bytes(
-            config[index..index + 4].try_into().unwrap(),
-        ));
-
-        index += 4;
-    }
-
-    Ok(Some(PwmConfig { steps, interval }))
-}
-
-fn save_config(config: &PwmConfig) -> Result<()> {
-    let mut buffer = vec![];
-    buffer.extend_from_slice(&config.interval.to_be_bytes());
-
-    for step in &config.steps {
-        buffer.extend_from_slice(&step.to_be_bytes());
-    }
-
-    fs::write(CONFIG_FILE_NAME, &buffer)?;
-
-    Ok(())
-}
-
-fn new_spiffs_config() -> esp_vfs_spiffs_conf_t {
-    let mut spiffs_config = esp_vfs_spiffs_conf_t::default();
-    spiffs_config.base_path = FS_BASE_PATH.as_ptr() as *const i8;
-    // spiffs_config.partition_label = "spiffs".as_ptr() as *const i8;
-    spiffs_config.max_files = 2;
-    spiffs_config.format_if_mount_failed = true;
-    spiffs_config
 }
 
 fn main() -> Result<()> {
@@ -116,51 +40,10 @@ fn main() -> Result<()> {
     let interval: Arc<Mutex<u64>> = Arc::new(Mutex::new(100));
 
     // setup spiffs
-    {
-        let spiffs_config = new_spiffs_config();
-
-        unsafe {
-            let res = esp_vfs_spiffs_register(&spiffs_config);
-            if res == ESP_OK {
-                info!("SPIFFS mounted");
-            } else {
-                error!(
-                    "Failed to initialize SPIFFS: {}",
-                    esp32::esp_err_to_str(res)
-                );
-                return Ok(());
-            }
-
-            let mut total_bytes: usize = 0;
-            let mut used_bytes: usize = 0;
-            let res = esp_spiffs_info(
-                spiffs_config.partition_label,
-                &mut total_bytes,
-                &mut used_bytes,
-            );
-            if res == ESP_OK {
-                info!("SPIFFS: total: {}, used: {}", total_bytes, used_bytes);
-            } else {
-                error!("Failed to get SPIFFS info: {}", esp32::esp_err_to_str(res));
-                return Ok(());
-            }
-
-            if used_bytes > total_bytes {
-                warn!(
-                    "Number of used bytes cannot be larger than total. Performing SPIFFS_check()."
-                );
-                let res = esp_spiffs_check(spiffs_config.partition_label);
-                if res != ESP_OK {
-                    error!("Failed to check SPIFFS: {}", esp32::esp_err_to_str(res));
-                }
-            }
-
-            info!("SPIFFS initialized");
-        };
-    }
+    storage::new()?;
 
     // read saved config
-    if let Some(pwm_config) = get_config()? {
+    if let Some(pwm_config) = storage::get_config()? {
         info!("read pwm config: {:?}", pwm_config);
         let mut steps = steps.lock().unwrap();
         *steps = pwm_config.steps.clone();
@@ -170,7 +53,47 @@ fn main() -> Result<()> {
         info!("no pwm config found");
     }
 
-    let w = wifi::setup(
+    #[cfg(feature = "esp-c3-32s")]
+    let pinner = main_loop::Pinner {
+        direction: PinDriver::output(peripherals.pins.gpio5)?, // blue led
+        led: pwm::new_driver(
+            unsafe { ledc::TIMER0::new() },
+            unsafe { ledc::CHANNEL0::new() },
+            peripherals.pins.gpio4, // green led
+            Some(Hertz(20_000)),
+            None,
+        )?,
+        output: pwm::new_driver(
+            unsafe { ledc::TIMER0::new() },
+            unsafe { ledc::CHANNEL0::new() },
+            peripherals.pins.gpio3, // red led
+            Some(Hertz(20_000)),
+            None,
+        )?,
+    };
+
+    #[cfg(feature = "esp32-c3-supermini")]
+    let pinner = main_loop::Pinner {
+        reverse: PinDriver::output(peripherals.pins.gpio0)?,
+        led: pwm::new_driver(
+            unsafe { ledc::TIMER0::new() },
+            unsafe { ledc::CHANNEL0::new() },
+            peripherals.pins.gpio8, // built-in led
+            Some(Hertz(20_000)),
+            None,
+        )?,
+        output: pwm::new_driver(
+            unsafe { ledc::TIMER0::new() },
+            unsafe { ledc::CHANNEL0::new() },
+            peripherals.pins.gpio3,
+            Some(Hertz(20_000)),
+            None,
+        )?,
+    };
+
+    let pwm_loop_handler = main_loop::new(pinner, Arc::clone(&interval), Arc::clone(&steps));
+
+    let w = wifi::new(
         peripherals.modem,
         sysloop,
         nvs,
@@ -180,41 +103,8 @@ fn main() -> Result<()> {
     )?;
     wifi::guard(w, Duration::from_secs(10));
 
-    #[cfg(feature = "esp-c3-32s")]
-    let mut reverse = PinDriver::output(
-        peripherals.pins.gpio5, // blue led
-    )
-    .unwrap();
-    #[cfg(feature = "esp-c3-32s")]
-    let mut led = pwm::new_driver(
-        unsafe { ledc::TIMER0::new() },
-        unsafe { ledc::CHANNEL0::new() },
-        peripherals.pins.gpio4, // green led
-    )?;
-    #[cfg(feature = "esp-c3-32s")]
-    let mut output = pwm::new_driver(
-        unsafe { ledc::TIMER0::new() },
-        unsafe { ledc::CHANNEL0::new() },
-        peripherals.pins.gpio3, // red led
-    )?;
-
-    #[cfg(feature = "esp32-c3-supermini")]
-    let mut reverse = PinDriver::output(peripherals.pins.gpio0).unwrap();
-    #[cfg(feature = "esp32-c3-supermini")]
-    let mut led = pwm::new_driver(
-        unsafe { ledc::TIMER0::new() },
-        unsafe { ledc::CHANNEL0::new() },
-        peripherals.pins.gpio8, // built-in led
-    )?;
-    #[cfg(feature = "esp32-c3-supermini")]
-    let mut output = pwm::new_driver(
-        unsafe { ledc::TIMER0::new() },
-        unsafe { ledc::CHANNEL0::new() },
-        peripherals.pins.gpio3,
-    )?;
-
     // http server
-    let mut server = http::server::EspHttpServer::new(&http::server::Configuration::default())?;
+    let mut server = server::EspHttpServer::new(&server::Configuration::default())?;
     server.fn_handler("/", Method::Get, http_handler::handle_index)?;
     server.fn_handler("/favicon.ico", Method::Get, http_handler::handle_favicon)?;
     server.fn_handler(
@@ -226,7 +116,18 @@ fn main() -> Result<()> {
     let cloned_steps = Arc::clone(&steps);
     let cloned_interval = Arc::clone(&interval);
     server.fn_handler("/pwm", Method::Post, move |mut req| -> Result<()> {
-        let mut buffer = Vec::new();
+        let size = req
+            .header("Content-Length")
+            .unwrap_or("0")
+            .parse::<usize>()
+            .unwrap_or(0);
+
+        let mut buffer = if size > 0 {
+            Vec::with_capacity(size)
+        } else {
+            Vec::new()
+        };
+
         let mut temp_buffer = [0u8; 1024];
 
         loop {
@@ -237,7 +138,7 @@ fn main() -> Result<()> {
             buffer.extend_from_slice(&temp_buffer[..bytes_read]);
         }
 
-        let config: PwmConfig = serde_json::from_slice(&buffer.as_slice())?;
+        let config: storage::PwmConfig = serde_json::from_slice(&buffer.as_slice())?;
 
         info!("steps: {:?}", config.steps.clone());
         info!("interval: {:?}", config.interval.clone());
@@ -248,7 +149,7 @@ fn main() -> Result<()> {
         let mut interval = cloned_interval.lock().unwrap();
         *interval = config.interval;
 
-        match save_config(&config) {
+        match storage::save_config(&config) {
             Result::Ok(_) => {
                 info!("config saved");
             }
@@ -265,49 +166,82 @@ fn main() -> Result<()> {
 
     println!("ESP Started!");
 
-    let mut index = 0;
-    let mut interval_: u64;
-    let mut duty: i32 = 0;
+    pwm_loop_handler.join().unwrap();
 
-    let max_duty = led.get_max_duty();
-    info!("max duty: {:?}", max_duty);
+    Ok(())
+}
 
-    loop {
-        {
-            interval_ = *interval.lock().unwrap();
-
-            let steps_ = steps.lock().unwrap();
-
-            if steps_.len() == 1 {
-                duty = steps_[0];
-            } else if steps_.len() > 1 {
-                if index >= steps_.len() {
-                    index = 0;
-                }
-                duty = steps_[index];
-            }
-        }
-
-        {
-            if duty < 0 {
-                duty = -duty;
-                if reverse.is_set_low() {
-                    reverse.set_high().unwrap();
-                }
-            } else {
-                if reverse.is_set_high() {
-                    reverse.set_low().unwrap();
-                }
-            }
-
-            led.set_duty(duty.try_into().unwrap()).unwrap();
-            output.set_duty(duty.try_into().unwrap()).unwrap();
-
-            // info!("duty: {:?}", duty);
-
-            index += 1;
-        }
-
-        thread::sleep(Duration::from_millis(interval_));
+mod main_loop {
+    use std::{
+        sync::{Arc, Mutex},
+        thread::{self, JoinHandle},
+        time::Duration,
+    };
+    
+    use esp_idf_svc::hal::{
+        gpio::{Output, OutputPin, PinDriver},
+        ledc::LedcDriver,
+    };
+    use log::info;
+    
+    pub struct Pinner<'a, ReversePin: OutputPin> {
+        pub direction: PinDriver<'a, ReversePin, Output>,
+        pub led: LedcDriver<'a>,
+        pub output: LedcDriver<'a>,
     }
+    
+    pub fn new<ReversePin: OutputPin>(
+        mut pinner: Pinner<'static, ReversePin>,
+        interval: Arc<Mutex<u64>>,
+        steps: Arc<Mutex<Vec<i32>>>,
+    ) -> JoinHandle<()> {
+        thread::spawn(move || {
+            let mut index = 0;
+            let mut interval_: u64;
+            let mut duty: i32 = 0;
+    
+            let max_duty = pinner.led.get_max_duty();
+            info!("max duty: {:?}", max_duty);
+    
+            loop {
+                {
+                    interval_ = *interval.lock().unwrap();
+    
+                    let steps_ = steps.lock().unwrap();
+    
+                    if steps_.len() == 1 {
+                        duty = steps_[0];
+                    } else if steps_.len() > 1 {
+                        if index >= steps_.len() {
+                            index = 0;
+                        }
+                        duty = steps_[index];
+                    }
+                }
+    
+                {
+                    if duty < 0 {
+                        duty = -duty;
+                        if pinner.direction.is_set_low() {
+                            pinner.direction.set_high().unwrap();
+                        }
+                    } else {
+                        if pinner.direction.is_set_high() {
+                            pinner.direction.set_low().unwrap();
+                        }
+                    }
+    
+                    pinner.led.set_duty(duty.try_into().unwrap()).unwrap();
+                    pinner.output.set_duty(duty.try_into().unwrap()).unwrap();
+    
+                    // info!("duty: {:?}", duty);
+    
+                    index += 1;
+                }
+    
+                thread::sleep(Duration::from_millis(interval_));
+            }
+        })
+    }
+    
 }

@@ -43,5 +43,5 @@ fs.writeFileSync(`${DIST}/index.html`, IndexHTML);
 if (!BuildDocs) {
   const gzipped = gzipSync(IndexHTML);
   fs.writeFileSync(`${DIST}/index.html.gz`, gzipped);
-  fs.writeFileSync(`./esp32/src/index.html.gz`, gzipped);
+  fs.writeFileSync(`./esp32/src/assets/index.html.gz`, gzipped);
 }

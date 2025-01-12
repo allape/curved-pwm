@@ -1,21 +1,21 @@
-use anyhow::{Ok, Result};
+use anyhow::Result;
 use log::info;
 use std::{
     thread::{self, JoinHandle},
     time::Duration,
 };
 
-use esp_idf_hal::peripheral;
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
+    hal::{modem, peripheral},
     ipv4,
     netif::{EspNetif, NetifConfiguration},
     nvs::EspDefaultNvsPartition,
     wifi::{AuthMethod, BlockingWifi, ClientConfiguration, Configuration, EspWifi, WifiDeviceId},
 };
 
-pub fn setup(
-    modem: impl peripheral::Peripheral<P = esp_idf_hal::modem::Modem> + 'static,
+pub fn new(
+    modem: impl peripheral::Peripheral<P = modem::Modem> + 'static,
     sysloop: EspSystemEventLoop,
     nvs: EspDefaultNvsPartition,
     device_name: &str,

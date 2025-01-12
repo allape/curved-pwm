@@ -32,9 +32,6 @@ log = "0.4"
 esp-idf-svc = { version = "0.50", features = ["critical-section", "embassy-time-driver", "embassy-sync"] }
 toml-cfg = "0.2.0"
 anyhow = "1.0.94"
-embedded-svc = "0.28.1"
-esp-idf-hal = "0.45.0"
-esp-idf-sys = "0.36.0"
 serde = { version = "1.0.217", features = ["derive"] }
 serde_json = "1.0.135"
 
@@ -44,5 +41,3 @@ embuild = "0.33"
 
 [dev-dependencies]
 cargo-espflash = "3.2.0"
-cargo-espmonitor = "0.10.0"
-cargo-flash = "1.0.1"

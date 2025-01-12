@@ -16,3 +16,10 @@ Edit PWM steps with a curve editor.
 - [Favicon](esp32/src/fan.png): https://www.irasutoya.com/2019/07/blog-post_8.html
 - ESP32: https://docs.espressif.com/projects/esp-idf/en/v5.4/esp32c3/get-started/index.html
 - ESPUP: https://github.com/esp-rs/espup
+
+### What I learned
+
+- Language `Rust`
+- `ESP-IDF`
+- When put a `&str.as_prt()` into C function, it must be ended with `\0`.
+  - Otherwise, the `invalid memory access` will occur, and there will be no error message.

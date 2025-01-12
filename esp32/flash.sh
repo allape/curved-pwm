@@ -6,7 +6,6 @@ if [ "$1" == "4mb" ]; then
 fi
 
 cargo build --release
-
 cargo espflash flash \
   --release \
   --baud 921600 \
