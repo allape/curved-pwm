@@ -14,6 +14,7 @@ Edit PWM steps with a curve editor.
 ### Credits
 
 - [Favicon](esp32/src/fan.png): https://www.irasutoya.com/2019/07/blog-post_8.html
+- Rotating Image: https://www.irasutoya.com/2017/09/blog-post_987.html
 - ESP32: https://docs.espressif.com/projects/esp-idf/en/v5.4/esp32c3/get-started/index.html
 - ESPUP: https://github.com/esp-rs/espup
 

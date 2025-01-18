@@ -18,6 +18,9 @@
           position: absolute;
           right: 0;
           top: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
       }
 
       .options-form {
@@ -25,7 +28,7 @@
           top: 0;
           right: 0;
           padding: 10px;
-          min-width: 150px;
+          min-width: 200px;
 
           .form-item {
               display: flex;
@@ -38,16 +41,33 @@
   </style>
 </head>
 <body>
-<div id="root"></div>
+<div id="root">
+  <img id="Rabbit" src="https://blogger.googleusercontent.com/img/b/R29vZ2xl/AVvXsEi2_eeP0fZQNEgZntX7RUkYSruwb9JiW5vuf-e9LMV2U-6MLqwn-MtOYlpsimJwTOvOHDEE61yIIgLdzzSPab_zeF8v-AOLwjNzu1Z0gdhsbFg9vz5u0aWe8iJTXGWS5JAXu-CLTgdTtvU/s430/animal_stand_usagi.png" alt="Rabbit" />
+</div>
 <div class="options-form">
+  <div class="form-item">
+    <label for="Preset">Preset:</label>
+    <select id="Preset">
+      <option value="">---</option>
+    </select>
+  </div>
+  <div class="form-item">
+    <label for="ServerPrefix">Server URL Prefix:</label>
+    <input id="ServerPrefix" name="serverPrefix">
+  </div>
+  <hr>
   <form id="options">
+    <div class="form-item">
+      <label for="LocalName">Local Name:</label>
+      <input id="LocalName" name="_name">
+    </div>
     <div class="form-item">
       <label for="MinPwm">Min PWM:</label>
       <input type="number" id="MinPwm" name="minPWM" value="0" step="1" min="0">
     </div>
     <div class="form-item">
       <label for="MaxPWM">Max PWM:</label>
-      <input type="number" id="MaxPWM" name="maxPWM" value="256" step="1" min="0">
+      <input type="number" id="MaxPWM" name="maxPWM" value="255" step="1" min="0">
     </div>
     <div class="form-item">
       <label for="Duration">Duration(ms):</label>
@@ -80,6 +100,9 @@
 <script>
   /**
    * @typedef Options
+   *
+   * @property {string} _name
+   *
    * @property {number} minPWM
    * @property {number} maxPWM
    * @property {number} duration
@@ -121,6 +144,10 @@
       return acc;
     }, {});
   }
+
+  const Params = getParams();
+
+  const KEY_PREFIX = 'CurvedPWM_';
 </script>
 <script>
   let curve;
@@ -130,11 +157,9 @@
   function main() {
     const root = window.document.getElementById('root');
 
-    const params = getParams();
-
     curve = new MojsCurveEditor({
       name: 'pwm',
-      startPath: params.path || 'M0, 100 C0, 100 50, 50 50, 50 C50, 50 100, 0 100, 0',
+      startPath: Params.path || 'M0, 100 C0, 100 50, 50 50, 50 C50, 50 100, 0 100, 0',
       isSaveState: false,
       isHiddenOnMin: false,
     });
@@ -167,13 +192,24 @@
     const EaseFunc = curve.getEasing();
     const maxSpeed = 0.1;
     let currentSpeed = 0;
-    shape = new mojs.Shape({
-      parent: root,
-      shape: 'polygon',
-      points: 3,
-      radius: 80,
-      rotate: { '0': 360 },
-      duration: (params.duration * 1) || 10000,
+    // shape = new mojs.Shape({
+    //   parent: root,
+    //   shape: 'polygon',
+    //   points: 3,
+    //   radius: 80,
+    //   rotate: { '0': 360 },
+    //   duration: (Params.duration * 1) || 10000,
+    //   isShowStart: true,
+    //   easing: progress => {
+    //     currentSpeed += EaseFunc(progress) * maxSpeed;
+    //     return currentSpeed;
+    //   },
+    // });
+
+    const html = new mojs.Html({
+      el: '#Rabbit',
+      rotateZ: { '0': 360 },
+      duration: (Params.duration * 1) || 10000,
       isShowStart: true,
       easing: progress => {
         currentSpeed += EaseFunc(progress) * maxSpeed;
@@ -182,14 +218,52 @@
     });
 
     player = new MojsPlayer({
-      add: shape,
+      add: html,
       isPlaying: true,
       isRepeat: true,
       isSaveState: false,
       precision: 100,
     });
 
-    window.document.getElementById('options').addEventListener('submit', async (e) => {
+    /** @type {HTMLSelectElement} */
+    const PresetSelector = document.getElementById('Preset');
+    /** @type {HTMLInputElement} */
+    const ServerPrefix = document.getElementById('ServerPrefix');
+    /** @type {HTMLFormElement} */
+    const Form = window.document.getElementById('options');
+
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key.startsWith(KEY_PREFIX)) {
+        const data = JSON.parse(localStorage.getItem(key));
+        PresetSelector.appendChild(new Option(data._name, data._name));
+      }
+    }
+
+    PresetSelector.addEventListener('change', e => {
+      try {
+        const data = JSON.parse(localStorage.getItem(`${KEY_PREFIX}${e.target.value}`));
+        console.log('loading preset:', data);
+
+        if (!data) {
+          return;
+        }
+        Object.entries(data).forEach(([key, value]) => {
+          const ele = Form.querySelector(`[name="${key}"]`);
+          if (ele) {
+            ele.value = value;
+          }
+        });
+
+        curve._props.startPath = data._curve;
+        curve._drawStartPath();
+      } catch (e) {
+        console.error(e);
+        alert('Failed to load preset');
+      }
+    });
+
+    Form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const data = getOptions(e.target);
 
@@ -218,6 +292,14 @@
         elapsed += data.interval;
       }
 
+      if (data._name) {
+        localStorage.setItem(`${KEY_PREFIX}${data._name}`, JSON.stringify({
+          ...data,
+          _curve: curve._prevPath,
+        }));
+        PresetSelector.appendChild(new Option(data._name, data._name));
+      }
+
       /**
        * @type {{steps: number[], interval: number}}
        */
@@ -229,7 +311,7 @@
       console.log('uploading data:', json);
 
       try {
-        const res = await (await fetch('/pwm', {
+        const res = await (await fetch(`${ServerPrefix.value}/pwm`, {
           method: 'POST',
           body: JSON.stringify(json),
         })).text();
